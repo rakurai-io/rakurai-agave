@@ -66,14 +66,7 @@ Once an ETA is available for the fix, a member of the anza-xyz/security-incident
 The teams are all over the world and it's critical to provide actionable information at the right time. Don't be the person that wakes everybody up at 2am when a fix won't be available for hours.
 
 ### 5. Ship the patch
-Once the fix is accepted, a member of the anza-xyz/security-incident-response group should prepare a single patch file for each affected branch. The commit title for the patch should only contain the advisory id, and not disclose any further details about the incident.
-Copy the patches to https://release.solana.com/ under a subdirectory named after the advisory id (example: https://release.solana.com/GHSA-hx59-f5g4-jghh/v1.4.patch). Contact a member of the anza-xyz/admins group if you require access to release.solana.com
-Using the "Solana Red Alert" channel:
-    a) Notify validators that there's an issue and a patch will be provided in X minutes
-    b) If X minutes expires and there's no patch, notify of the delay and provide a new ETA
-    c) Provide links to patches of https://release.solana.com/ for each affected branch
-Validators can be expected to build the patch from source against the latest release for the affected branch.
-Since the software version will not change after the patch is applied, request that each validator notify in the existing channel once they've updated. Manually monitor the roll out until a sufficient amount of stake has updated - typically at least 33.3% or 66.6% depending on the issue.
+Once the fix is accepted it may be distributed directly to validators as a patch, depending on the vulnerability.
 
 ### 6. Public Disclosure and Release
 Once the fix has been deployed to the security group validators, the patches from the security advisory may be merged into the main source repository. A new official release for each affected branch should be shipped and all validators requested to upgrade as quickly as possible.
