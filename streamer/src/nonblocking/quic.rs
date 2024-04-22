@@ -335,6 +335,7 @@ fn handle_and_cache_new_connection(
         params.total_stake,
     ) as u64)
     {
+<<<<<<< HEAD
         connection.set_max_concurrent_uni_streams(max_uni_streams);
         let receive_window = compute_recieve_window(
             params.max_stake,
@@ -342,12 +343,11 @@ fn handle_and_cache_new_connection(
             connection_table_l.peer_type,
             params.stake,
         );
-
-        if let Ok(receive_window) = receive_window {
-            connection.set_receive_window(receive_window);
-        }
-
+=======
         let remote_addr = connection.remote_address();
+        let receive_window =
+            compute_recieve_window(params.max_stake, params.min_stake, params.peer_type);
+>>>>>>> 2770424782 (quic: delay calling set_max_concurrent_uni_streams/set_receive_window (#904))
 
         debug!(
             "Peer type: {:?}, stake {}, total stake {}, max streams {} receive_window {:?} from peer {}",
@@ -369,6 +369,12 @@ fn handle_and_cache_new_connection(
         ) {
             let peer_type = connection_table_l.peer_type;
             drop(connection_table_l);
+
+            if let Ok(receive_window) = receive_window {
+                connection.set_receive_window(receive_window);
+            }
+            connection.set_max_concurrent_uni_streams(max_uni_streams);
+
             tokio::spawn(handle_connection(
                 connection,
                 remote_addr,
