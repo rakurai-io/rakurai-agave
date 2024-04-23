@@ -335,19 +335,13 @@ fn handle_and_cache_new_connection(
         params.total_stake,
     ) as u64)
     {
-<<<<<<< HEAD
-        connection.set_max_concurrent_uni_streams(max_uni_streams);
         let receive_window = compute_recieve_window(
             params.max_stake,
             params.min_stake,
             connection_table_l.peer_type,
             params.stake,
         );
-=======
         let remote_addr = connection.remote_address();
-        let receive_window =
-            compute_recieve_window(params.max_stake, params.min_stake, params.peer_type);
->>>>>>> 2770424782 (quic: delay calling set_max_concurrent_uni_streams/set_receive_window (#904))
 
         debug!(
             "Peer type: {:?}, stake {}, total stake {}, max streams {} receive_window {:?} from peer {}",
