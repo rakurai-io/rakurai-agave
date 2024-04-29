@@ -217,13 +217,8 @@ mod tests {
         crossbeam_channel::unbounded,
         solana_sdk::{net::DEFAULT_TPU_COALESCE, signature::Keypair},
         solana_streamer::{
-<<<<<<< HEAD
-            nonblocking::quic::DEFAULT_WAIT_FOR_CHUNK_TIMEOUT, streamer::StakedNodes,
-=======
             nonblocking::quic::{DEFAULT_MAX_STREAMS_PER_MS, DEFAULT_WAIT_FOR_CHUNK_TIMEOUT},
-            quic::SpawnServerResult,
             streamer::StakedNodes,
->>>>>>> f2aa4f0741 (Parameterize max streams per ms (#707))
         },
         std::{
             net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},

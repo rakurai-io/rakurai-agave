@@ -1,14 +1,6 @@
 use {
     crate::{
-<<<<<<< HEAD
         quic::{configure_server, QuicServerError, StreamStats, MAX_UNSTAKED_CONNECTIONS},
-=======
-        nonblocking::stream_throttle::{
-            ConnectionStreamCounter, StakedStreamLoadEMA, STREAM_STOP_CODE_THROTTLING,
-            STREAM_THROTTLING_INTERVAL_MS,
-        },
-        quic::{configure_server, QuicServerError, StreamStats},
->>>>>>> f2aa4f0741 (Parameterize max streams per ms (#707))
         streamer::StakedNodes,
         tls_certificates::get_pubkey_from_tls_certificate,
     },
@@ -61,9 +53,8 @@ use {
     },
 };
 
-/// Limit to 500K PPS
-const MAX_STREAMS_PER_100MS: u64 = 500_000 / 10;
 const MAX_UNSTAKED_STREAMS_PERCENT: u64 = 20;
+const STREAM_THROTTLING_INTERVAL_MS: u64 = 100;
 const STREAM_THROTTLING_INTERVAL: Duration = Duration::from_millis(100);
 const WAIT_FOR_STREAM_TIMEOUT: Duration = Duration::from_millis(100);
 pub const DEFAULT_WAIT_FOR_CHUNK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,8 +74,8 @@ const CONNECTION_CLOSE_CODE_TOO_MANY: u32 = 4;
 const CONNECTION_CLOSE_REASON_TOO_MANY: &[u8] = b"too_many";
 const STREAM_STOP_CODE_THROTTLING: u32 = 15;
 
-/// Limit to 250K PPS
-pub const DEFAULT_MAX_STREAMS_PER_MS: u64 = 250;
+/// Limit to 500K PPS
+pub const DEFAULT_MAX_STREAMS_PER_MS: u64 = 500;
 
 // A sequence of bytes that is part of a packet
 // along with where in the packet it is
@@ -174,17 +165,8 @@ async fn run_server(
     const WAIT_FOR_CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
     debug!("spawn quic server");
     let mut last_datapoint = Instant::now();
-<<<<<<< HEAD
     let unstaked_connection_table: Arc<Mutex<ConnectionTable>> = Arc::new(Mutex::new(
         ConnectionTable::new(ConnectionPeerType::Unstaked),
-=======
-    let unstaked_connection_table: Arc<Mutex<ConnectionTable>> =
-        Arc::new(Mutex::new(ConnectionTable::new()));
-    let stream_load_ema = Arc::new(StakedStreamLoadEMA::new(
-        stats.clone(),
-        max_unstaked_connections,
-        max_streams_per_ms,
->>>>>>> f2aa4f0741 (Parameterize max streams per ms (#707))
     ));
     let staked_connection_table: Arc<Mutex<ConnectionTable>> =
         Arc::new(Mutex::new(ConnectionTable::new(ConnectionPeerType::Staked)));
@@ -352,6 +334,7 @@ fn handle_and_cache_new_connection(
     params: &NewConnectionHandlerParams,
     wait_for_chunk_timeout: Duration,
     max_unstaked_connections: usize,
+    max_streams_per_ms: u64,
 ) -> Result<(), ConnectionHandlerError> {
     if let Ok(max_uni_streams) = VarInt::from_u64(compute_max_allowed_uni_streams(
         connection_table_l.peer_type,
@@ -403,6 +386,7 @@ fn handle_and_cache_new_connection(
                 peer_type,
                 wait_for_chunk_timeout,
                 max_unstaked_connections,
+                max_streams_per_ms,
             ));
             Ok(())
         } else {
@@ -431,6 +415,7 @@ async fn prune_unstaked_connections_and_add_new_connection(
     max_connections: usize,
     params: &NewConnectionHandlerParams,
     wait_for_chunk_timeout: Duration,
+    max_streams_per_ms: u64,
 ) -> Result<(), ConnectionHandlerError> {
     let stats = params.stats.clone();
     if max_connections > 0 {
@@ -444,6 +429,7 @@ async fn prune_unstaked_connections_and_add_new_connection(
             params,
             wait_for_chunk_timeout,
             max_connections,
+            max_streams_per_ms,
         )
     } else {
         connection.close(
@@ -527,14 +513,9 @@ async fn setup_connection(
                     ),
                     |(pubkey, stake, total_stake, max_stake, min_stake)| {
                         // The heuristic is that the stake should be large engouh to have 1 stream pass throuh within one throttle
-<<<<<<< HEAD
-                        // interval during which we allow max MAX_STREAMS_PER_100MS streams.
-                        let min_stake_ratio = 1_f64 / MAX_STREAMS_PER_100MS as f64;
-=======
                         // interval during which we allow max (MAX_STREAMS_PER_MS * STREAM_THROTTLING_INTERVAL_MS) streams.
                         let min_stake_ratio =
                             1_f64 / (max_streams_per_ms * STREAM_THROTTLING_INTERVAL_MS) as f64;
->>>>>>> f2aa4f0741 (Parameterize max streams per ms (#707))
                         let stake_ratio = stake as f64 / total_stake as f64;
                         let stake = if stake_ratio < min_stake_ratio {
                             // If it is a staked connection with ultra low stake ratio, treat it as unstaked.
@@ -572,6 +553,7 @@ async fn setup_connection(
                             &params,
                             wait_for_chunk_timeout,
                             max_unstaked_connections,
+                            max_streams_per_ms,
                         ) {
                             stats
                                 .connection_added_from_staked_peer
@@ -587,6 +569,7 @@ async fn setup_connection(
                             max_unstaked_connections,
                             &params,
                             wait_for_chunk_timeout,
+                            max_streams_per_ms,
                         )
                         .await
                         {
@@ -608,6 +591,7 @@ async fn setup_connection(
                     max_unstaked_connections,
                     &params,
                     wait_for_chunk_timeout,
+                    max_streams_per_ms,
                 )
                 .await
                 {
@@ -756,12 +740,14 @@ fn max_streams_for_connection_in_100ms(
     stake: u64,
     total_stake: u64,
     max_unstaked_connections: usize,
+    max_streams_per_ms: u64,
 ) -> u64 {
+    let max_streams_per_interval = max_streams_per_ms.saturating_mul(STREAM_THROTTLING_INTERVAL_MS);
     let max_unstaked_streams_per_100ms = if max_unstaked_connections == 0 {
         0
     } else {
         Percentage::from(MAX_UNSTAKED_STREAMS_PERCENT)
-            .apply_to(MAX_STREAMS_PER_100MS)
+            .apply_to(max_streams_per_interval)
             .saturating_div(MAX_UNSTAKED_CONNECTIONS as u64)
     };
 
@@ -775,8 +761,8 @@ fn max_streams_for_connection_in_100ms(
     if matches!(connection_type, ConnectionPeerType::Unstaked) || stake == 0 {
         max_unstaked_streams_per_100ms
     } else {
-        let max_total_staked_streams: u64 = MAX_STREAMS_PER_100MS
-            - Percentage::from(MAX_UNSTAKED_STREAMS_PERCENT).apply_to(MAX_STREAMS_PER_100MS);
+        let max_total_staked_streams: u64 = max_streams_per_interval
+            - Percentage::from(MAX_UNSTAKED_STREAMS_PERCENT).apply_to(max_streams_per_interval);
         std::cmp::max(
             min_staked_streams_per_100ms,
             ((max_total_staked_streams as f64 / total_stake as f64) * stake as f64) as u64,
@@ -793,6 +779,7 @@ fn reset_throttling_params_if_needed(last_instant: &mut tokio::time::Instant) ->
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     connection: Connection,
     remote_addr: SocketAddr,
@@ -803,6 +790,7 @@ async fn handle_connection(
     peer_type: ConnectionPeerType,
     wait_for_chunk_timeout: Duration,
     max_unstaked_connections: usize,
+    max_streams_per_ms: u64,
 ) {
     let stats = params.stats;
     debug!(
@@ -818,6 +806,7 @@ async fn handle_connection(
         params.stake,
         params.total_stake,
         max_unstaked_connections,
+        max_streams_per_ms,
     );
     let mut last_throttling_instant = tokio::time::Instant::now();
     let mut streams_in_current_interval = 0;
@@ -2154,7 +2143,8 @@ pub mod test {
                 ConnectionPeerType::Unstaked,
                 0,
                 10000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS,
             ),
             20
         );
@@ -2165,7 +2155,8 @@ pub mod test {
                 ConnectionPeerType::Unstaked,
                 10,
                 10000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS,
             ),
             20
         );
@@ -2177,7 +2168,8 @@ pub mod test {
                 ConnectionPeerType::Staked,
                 0,
                 10000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS,
             ),
             20
         );
@@ -2189,7 +2181,8 @@ pub mod test {
                 ConnectionPeerType::Staked,
                 15,
                 10000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS
             ),
             60
         );
@@ -2201,7 +2194,8 @@ pub mod test {
                 ConnectionPeerType::Staked,
                 1000,
                 10000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS
             ),
             4000
         );
@@ -2213,7 +2207,8 @@ pub mod test {
                 ConnectionPeerType::Staked,
                 1,
                 50000,
-                MAX_UNSTAKED_CONNECTIONS
+                MAX_UNSTAKED_CONNECTIONS,
+                DEFAULT_MAX_STREAMS_PER_MS
             ),
             21
         );
