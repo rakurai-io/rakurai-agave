@@ -170,7 +170,7 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
         .map(|etx| match etx {
             (tx, Ok(tx_details)) => {
                 // load transactions
-                load_transaction_accounts(
+                let loaded_transaction = match load_transaction_accounts(
                     callbacks,
                     tx,
                     tx_details,
@@ -179,7 +179,12 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
                     feature_set,
                     rent_collector,
                     loaded_programs,
-                )
+                ) {
+                    Ok(loaded_transaction) => loaded_transaction,
+                    Err(e) => return Err(e),
+                };
+
+                Ok(loaded_transaction)
             }
             (_, Err(e)) => Err(e),
         })
@@ -230,7 +235,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                 } else if let Some(account_override) =
                     account_overrides.and_then(|overrides| overrides.get(key))
                 {
-                    (account_override.data().len(), account_override.clone(), 0)
+                    (account_override.data().len(), account_override.clone())
                 } else if let Some(program) = (!instruction_account && !message.is_writable(i))
                     .then_some(())
                     .and_then(|_| loaded_programs.find(key))
@@ -241,7 +246,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                     // Optimization to skip loading of accounts which are only used as
                     // programs in top-level instructions and not passed as instruction accounts.
                     let program_account = account_shared_data_from_program(&program);
-                    (program.account_size, program_account, 0)
+                    (program.account_size, program_account)
                 } else {
                     callbacks
                         .get_account_shared_data(key)
@@ -267,7 +272,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                             // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
                             // with this field already set would allow us to skip rent collection for these accounts.
                             default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                            (default_account.data().len(), default_account, 0)
+                            (default_account.data().len(), default_account)
                         })
                 };
                 accumulate_and_check_loaded_account_data_size(
@@ -482,7 +487,6 @@ mod tests {
         error_metrics: &mut TransactionErrorMetrics,
         feature_set: &mut FeatureSet,
     ) -> Vec<TransactionLoadResult> {
-        feature_set.deactivate(&feature_set::disable_rent_fees_collection::id());
         let sanitized_tx = SanitizedTransaction::from_transaction_for_tests(tx);
         let fee_payer_account = accounts[0].1.clone();
         let mut accounts_map = HashMap::new();
