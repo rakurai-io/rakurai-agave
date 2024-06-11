@@ -146,6 +146,9 @@ mod tests {
     fn test_unlock_failures() {
         let (bank, txs) = setup(true);
 
+        let feature_set: Arc<FeatureSet> = bank.feature_set.clone();
+        let allow_self_conflicting_txns = feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
+
         // Test getting locked accounts
         let mut batch = bank.prepare_sanitized_batch(&txs);
         assert_eq!(
