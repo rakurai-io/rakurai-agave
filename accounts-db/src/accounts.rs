@@ -570,13 +570,13 @@ impl Accounts {
         writable_keys: Vec<&Pubkey>,
         readonly_keys: Vec<&Pubkey>,
         entry_accts_lookup: &mut EntryAcctLocks,
-        allow_self_conflicting_entries: &bool,
+        allow_self_conflicting_entries: bool,
     ) -> (Result<()>, bool) {
         let mut self_conflicting_account: bool = false;
         let mut self_conflicting_tx = false;
         for k in writable_keys.iter() {
             if account_locks.is_locked_write(k) || account_locks.is_locked_readonly(k) {
-                if *allow_self_conflicting_entries {
+                if allow_self_conflicting_entries {
                     self_conflicting_account = entry_accts_lookup.writables.contains(k)
                         || entry_accts_lookup.readables.contains(k);
                 }
@@ -584,24 +584,20 @@ impl Accounts {
                     debug!("Writable account in use: {:?}", k);
                     return (Err(TransactionError::AccountInUse), self_conflicting_tx);
                 } else {
-                    if !self_conflicting_tx {
-                        self_conflicting_tx = true;
-                    }
+                    self_conflicting_tx = true;
                 }
             }
         }
         for k in readonly_keys.iter() {
             if account_locks.is_locked_write(k) {
-                if *allow_self_conflicting_entries {
+                if allow_self_conflicting_entries {
                     self_conflicting_account = entry_accts_lookup.writables.contains(k);
                 }
                 if !self_conflicting_account {
                     debug!("Read-only account in use: {:?}", k);
                     return (Err(TransactionError::AccountInUse), self_conflicting_tx);
                 } else {
-                    if !self_conflicting_tx {
-                        self_conflicting_tx = true;
-                    }
+                    self_conflicting_tx = true;
                 }
             }
         }
@@ -646,7 +642,7 @@ impl Accounts {
         &self,
         txs: impl Iterator<Item = &'a SanitizedTransaction>,
         tx_account_lock_limit: usize,
-        allow_self_conflicting_entries: &bool,
+        allow_self_conflicting_entries: bool,
     ) -> (Vec<Result<()>>, bool) {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .map(|tx| tx.get_account_locks(tx_account_lock_limit))
@@ -660,7 +656,7 @@ impl Accounts {
         txs: impl Iterator<Item = &'a SanitizedTransaction>,
         results: impl Iterator<Item = Result<()>>,
         tx_account_lock_limit: usize,
-        allow_self_conflicting_entries: &bool,
+        allow_self_conflicting_entries: bool,
     ) -> Vec<Result<()>> {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .zip(results)
@@ -678,7 +674,7 @@ impl Accounts {
     fn lock_accounts_inner(
         &self,
         tx_account_locks_results: Vec<Result<TransactionAccountLocks>>,
-        allow_self_conflicting_entries: &bool,
+        allow_self_conflicting_entries: bool,
     ) -> (Vec<Result<()>>, bool) {
         let account_locks = &mut self.account_locks.lock().unwrap();
         let mut entry_accts_lookup = EntryAcctLocks::with_capacity(ENTRY_ACCTS_LOOKUP_TABLE_SIZE);
@@ -1174,7 +1170,7 @@ mod tests {
         };
 
         let tx = new_sanitized_tx(&[&keypair], message, Hash::default());
-        let (results, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+        let (results, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, false);
         assert_eq!(results[0], Err(TransactionError::AccountLoadedTwice));
     }
 
@@ -1202,7 +1198,7 @@ mod tests {
             };
 
             let txs = vec![new_sanitized_tx(&[&keypair], message, Hash::default())];
-            let (results, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+            let (results, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, false);
             assert_eq!(results, vec![Ok(())]);
             accounts.unlock_accounts(txs.iter().zip(&results));
         }
@@ -1224,7 +1220,7 @@ mod tests {
             };
 
             let txs = vec![new_sanitized_tx(&[&keypair], message, Hash::default())];
-            let (results, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+            let (results, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, false);
             assert_eq!(results[0], Err(TransactionError::TooManyAccountLocks));
         }
     }
@@ -1259,7 +1255,7 @@ mod tests {
         );
         let tx = new_sanitized_tx(&[&keypair0], message, Hash::default());
         let (results0, _) =
-            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, false);
 
         assert_eq!(results0, vec![Ok(())]);
         assert_eq!(
@@ -1294,7 +1290,7 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, false);
         assert_eq!(
             results1,
             vec![
@@ -1325,7 +1321,7 @@ mod tests {
             instructions,
         );
         let tx = new_sanitized_tx(&[&keypair1], message, Hash::default());
-        let (results2, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+        let (results2, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, false);
         assert_eq!(
             results2,
             vec![Ok(())] // Now keypair1 account can be locked as writable
@@ -1372,7 +1368,7 @@ mod tests {
         );
         let tx = new_sanitized_tx(&[&keypair0], message, Hash::default());
         let (results0, _) =
-            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, true);
 
         assert_eq!(results0, vec![Ok(())]);
         assert_eq!(
@@ -1421,7 +1417,7 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
         assert_eq!(
             results1,
             vec![
@@ -1465,7 +1461,7 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
         assert_eq!(
             results1,
             vec![
@@ -1507,7 +1503,7 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair0], message, Hash::default());
         let txs2 = vec![tx0, tx1];
-        let (results2, _) = accounts.lock_accounts(txs2.iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+        let (results2, _) = accounts.lock_accounts(txs2.iter(), MAX_TX_ACCOUNT_LOCKS, true);
         assert_eq!(
             results2,
             vec![
@@ -1540,7 +1536,7 @@ mod tests {
         );
         let tx = new_sanitized_tx(&[&keypair3], message, Hash::default());
         let (results0, _) =
-            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, true);
 
 
 
@@ -1566,7 +1562,7 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &true);
+        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
         assert_eq!(
             results1,
             vec![
@@ -1597,7 +1593,7 @@ mod tests {
             instructions,
         );
         let tx = new_sanitized_tx(&[&keypair1], message, Hash::default());
-        let (results2, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+        let (results2, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, false);
         assert_eq!(
             results2,
             vec![Ok(())] // Now keypair1 account can be locked as writable
@@ -1664,7 +1660,7 @@ mod tests {
             let (results, _) =
                 accounts_clone
                     .clone()
-                    .lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+                    .lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, false);
             for result in results.iter() {
                 if result.is_ok() {
                     counter_clone.clone().fetch_add(1, Ordering::SeqCst);
@@ -1681,7 +1677,7 @@ mod tests {
             let (results, _) =
                 accounts_arc
                     .clone()
-                    .lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+                    .lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, false);
             if results[0].is_ok() {
                 let counter_value = counter_clone.clone().load(Ordering::SeqCst);
                 thread::sleep(time::Duration::from_millis(50));
@@ -1722,7 +1718,7 @@ mod tests {
             instructions,
         );
         let tx = new_sanitized_tx(&[&keypair0], message, Hash::default());
-        let (results0, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, &false);
+        let (results0, _) = accounts.lock_accounts([tx].iter(), MAX_TX_ACCOUNT_LOCKS, false);
 
         assert!(results0[0].is_ok());
         // Instruction program-id account demoted to readonly
@@ -1826,7 +1822,7 @@ mod tests {
             txs.iter(),
             qos_results.into_iter(),
             MAX_TX_ACCOUNT_LOCKS,
-            &false,
+            false,
         );
 
         assert_eq!(
