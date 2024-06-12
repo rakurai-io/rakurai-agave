@@ -25,7 +25,10 @@ use {
         transaction_context::{IndexOfAccount, TransactionAccount},
     },
     solana_system_program::{get_system_account_kind, SystemAccountKind},
-    std::num::NonZeroUsize,
+    std::{
+        num::NonZeroUsize,
+        collections::HashMap,
+    },
 };
 
 // for the load instructions
@@ -33,6 +36,7 @@ pub(crate) type TransactionRent = u64;
 pub(crate) type TransactionProgramIndices = Vec<Vec<IndexOfAccount>>;
 pub type TransactionCheckResult = Result<CheckedTransactionDetails>;
 pub type TransactionLoadResult = Result<LoadedTransaction>;
+pub type UniqueLoadedAccounts = HashMap<Pubkey, AccountSharedData>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct CheckedTransactionDetails {
@@ -121,6 +125,7 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
     error_counters: &mut TransactionErrorMetrics,
     account_overrides: Option<&AccountOverrides>,
     loaded_programs: &ProgramCacheForTxBatch,
+    unique_loaded_accounts: &mut UniqueLoadedAccounts
 ) -> Vec<TransactionLoadResult> {
     txs.iter()
         .zip(check_results)
@@ -140,6 +145,7 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
                     error_counters,
                     account_overrides,
                     loaded_programs,
+                    unique_loaded_accounts,
                 ) {
                     Ok(loaded_transaction) => loaded_transaction,
                     Err(e) => return Err(e),
@@ -158,6 +164,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     error_counters: &mut TransactionErrorMetrics,
     account_overrides: Option<&AccountOverrides>,
     loaded_programs: &ProgramCacheForTxBatch,
+    unique_loaded_accounts: &mut UniqueLoadedAccounts,
 ) -> Result<LoadedTransaction> {
     // There is no way to predict what program will execute without an error
     // If a fee can pay for execution then the program will be scheduled
@@ -205,9 +212,13 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                     let program_account = account_shared_data_from_program(&program);
                     (program.account_size, program_account)
                 } else {
-                    callbacks
+                    if !unique_loaded_accounts.contains_key(key) {
+                        callbacks
                         .get_account_shared_data(key)
-                        .map(|account| (account.data().len(), account))
+                        .map(|account| {
+                            unique_loaded_accounts.insert(*key, account.clone());
+                            (account.data().len(), account)
+                        })
                         .unwrap_or_else(|| {
                             account_found = false;
                             let mut default_account = AccountSharedData::default();
@@ -215,8 +226,15 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                             // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
                             // with this field already set would allow us to skip rent collection for these accounts.
                             default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                            unique_loaded_accounts.insert(*key, default_account.clone());
                             (default_account.data().len(), default_account)
                         })
+                    } 
+                    else {
+                        let account = unique_loaded_accounts.get(key).unwrap().clone();
+                        (account.data().len(), account)
+                    }
+                    
                 };
                 accumulate_and_check_loaded_account_data_size(
                     &mut accumulated_accounts_data_size,
@@ -312,7 +330,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
 ///   else
 ///     user requested loaded accounts size.
 ///     Note, requesting zero bytes will result transaction error
-fn get_requested_loaded_accounts_data_size_limit(
+pub fn get_requested_loaded_accounts_data_size_limit(
     sanitized_message: &SanitizedMessage,
 ) -> Result<Option<NonZeroUsize>> {
     let compute_budget_limits =
@@ -342,7 +360,7 @@ fn account_shared_data_from_program(loaded_program: &ProgramCacheEntry) -> Accou
 /// Returns TransactionErr::MaxLoadedAccountsDataSizeExceeded if
 /// `requested_loaded_accounts_data_size_limit` is specified and
 /// `accumulated_accounts_data_size` exceeds it.
-fn accumulate_and_check_loaded_account_data_size(
+pub fn accumulate_and_check_loaded_account_data_size(
     accumulated_loaded_accounts_data_size: &mut usize,
     account_data_size: usize,
     requested_loaded_accounts_data_size_limit: Option<NonZeroUsize>,
@@ -374,7 +392,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            nonce_info::{NonceFull, NoncePartial},
+            nonce_info::NoncePartial,
             transaction_account_state_info::TransactionAccountStateInfo,
             transaction_processing_callback::TransactionProcessingCallback,
         },
@@ -458,6 +476,7 @@ mod tests {
             rent_collector: rent_collector.clone(),
             feature_set: Arc::new(feature_set.clone()),
         };
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         load_accounts(
             &callbacks,
             &[sanitized_tx],
@@ -468,6 +487,7 @@ mod tests {
             error_counters,
             None,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         )
     }
 
@@ -786,6 +806,7 @@ mod tests {
             rent_collector: RentCollector::default(),
             feature_set: Arc::new(FeatureSet::all_enabled()),
         };
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         load_accounts(
             &callbacks,
             &[tx],
@@ -796,6 +817,7 @@ mod tests {
             &mut error_counters,
             account_overrides,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         )
     }
 
@@ -1142,12 +1164,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1207,12 +1231,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(result.err(), Some(TransactionError::AccountNotFound));
@@ -1248,12 +1274,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(result.err(), Some(TransactionError::ProgramAccountNotFound));
@@ -1289,12 +1317,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(
@@ -1337,12 +1367,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1404,12 +1436,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1459,12 +1493,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1519,12 +1555,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1606,12 +1644,14 @@ mod tests {
             vec![Signature::new_unique()],
             false,
         );
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_transaction_accounts(
             &mock_bank,
             sanitized_transaction.message(),
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
         mock_bank
             .accounts_map
@@ -1676,6 +1716,7 @@ mod tests {
         let num_accounts = tx.message().account_keys.len();
         let sanitized_tx = SanitizedTransaction::from_transaction_for_tests(tx);
         let mut error_counters = TransactionErrorMetrics::default();
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let loaded_txs = load_accounts(
             &bank,
             &[sanitized_tx.clone()],
@@ -1686,6 +1727,7 @@ mod tests {
             &mut error_counters,
             None,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         );
 
         let compute_budget = ComputeBudget::new(u64::from(
@@ -1763,6 +1805,7 @@ mod tests {
             lamports_per_signature: Some(20),
         });
 
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let results = load_accounts(
             &mock_bank,
             &[sanitized_transaction],
@@ -1770,6 +1813,7 @@ mod tests {
             &mut error_counter,
             None,
             &loaded_programs,
+            &mut unique_loaded_accounts,
         );
 
         let mut account_data = AccountSharedData::default();
@@ -1796,11 +1840,7 @@ mod tests {
                     ),
                 ],
                 program_indices: vec![vec![3, 1], vec![3, 1]],
-                nonce: Some(NonceFull::new(
-                    Pubkey::from([0; 32]),
-                    AccountSharedData::default(),
-                    Some(mock_bank.accounts_map[&key2.pubkey()].clone())
-                )),
+                nonce: None,
                 rent: 0,
                 rent_debits: RentDebits::default()
             }
@@ -1833,6 +1873,7 @@ mod tests {
             lamports_per_signature: None,
         });
 
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_accounts(
             &mock_bank,
             &[sanitized_transaction.clone()],
@@ -1840,6 +1881,7 @@ mod tests {
             &mut TransactionErrorMetrics::default(),
             None,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(result, vec![Err(TransactionError::ProgramAccountNotFound)]);
@@ -1849,6 +1891,7 @@ mod tests {
             lamports_per_signature: Some(20),
         });
 
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_accounts(
             &mock_bank,
             &[sanitized_transaction.clone()],
@@ -1856,12 +1899,13 @@ mod tests {
             &mut TransactionErrorMetrics::default(),
             None,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(result, vec![Err(TransactionError::ProgramAccountNotFound)]);
 
         let check_result = Err(TransactionError::InvalidWritableAccount);
-
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let result = load_accounts(
             &mock_bank,
             &[sanitized_transaction.clone()],
@@ -1869,6 +1913,7 @@ mod tests {
             &mut TransactionErrorMetrics::default(),
             None,
             &ProgramCacheForTxBatch::default(),
+            &mut unique_loaded_accounts,
         );
 
         assert_eq!(result, vec![Err(TransactionError::InvalidWritableAccount)]);

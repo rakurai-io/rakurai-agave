@@ -2,7 +2,8 @@ use {
     crate::{
         account_loader::{
             load_accounts, validate_fee_payer, LoadedTransaction, TransactionCheckResult,
-            TransactionLoadResult, TransactionRent,
+            TransactionLoadResult, TransactionRent, UniqueLoadedAccounts, 
+            accumulate_and_check_loaded_account_data_size, get_requested_loaded_accounts_data_size_limit
         },
         account_overrides::AccountOverrides,
         message_processor::MessageProcessor,
@@ -42,6 +43,7 @@ use {
             remove_rounding_in_fee_calculation, FeatureSet,
         },
         fee::FeeStructure,
+        hash::Hash,
         inner_instruction::{InnerInstruction, InnerInstructionsList},
         instruction::{CompiledInstruction, TRANSACTION_LEVEL_STACK_HEIGHT},
         message::SanitizedMessage,
@@ -64,8 +66,6 @@ use {
         },
     },
 };
-
-const MAX_NUM_TRANSACTIONS_PER_BATCH: usize = 64;
 
 /// A list of log messages emitted during a transaction
 pub type TransactionLogMessages = Vec<String>;
@@ -234,6 +234,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         program_cache_time.stop();
 
         let mut load_time = Measure::start("accounts_load");
+        let mut unique_loaded_accounts: UniqueLoadedAccounts = HashMap::default();
         let mut loaded_transactions = load_accounts(
             callbacks,
             sanitized_txs,
@@ -241,24 +242,16 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             error_counters,
             account_overrides,
             &program_cache_for_tx_batch.borrow(),
+            &mut unique_loaded_accounts
         );
         load_time.stop();
 
         let mut execution_time = Measure::start("execution_time");
 
-        // collect unique loaded accounts
-        let mut unique_loaded_accounts: HashMap<Pubkey, AccountSharedData> = HashMap::default();
-        for tx in loaded_transactions.iter().filter(|tx| tx.is_ok()) {
-            let accts = &tx.as_ref().unwrap().accounts;
-            for acct in accts.iter() {
-                unique_loaded_accounts.insert(acct.0, acct.1.clone());
-            }
-        }
-
-        let mut entry_level_dedup_map = HashSet::with_capacity(MAX_NUM_TRANSACTIONS_PER_BATCH);
         let mut error = None;
         let feature_set = callbacks.get_feature_set();
         let rent_collector = callbacks.get_rent_collector();
+        let mut dedup_nonce_lookup: HashSet<Hash> = HashSet::default();
         let execution_results: Vec<TransactionExecutionResult> = loaded_transactions
             .iter_mut()
             .zip(sanitized_txs.iter())
@@ -273,15 +266,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                         lamports_per_signature = check_result.lamports_per_signature;
                     }
 
-                    let msg_hash = tx.message_hash();
-                    if entry_level_dedup_map.contains(msg_hash) {
-                        Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
-                        return TransactionExecutionResult::NotExecuted(
-                            TransactionError::AlreadyProcessed,
-                        );
-                    } else {
-                        entry_level_dedup_map.insert(msg_hash);
-                    }
                     let compute_budget =
                         if let Some(compute_budget) = self.runtime_config.compute_budget {
                             compute_budget
@@ -337,8 +321,22 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
 
                     // collect rent and fee
                     error = None;
+                    let requested_loaded_accounts_data_size_limit;
+                    match get_requested_loaded_accounts_data_size_limit(message) {
+                        Ok(accounts_data_size_limit) => requested_loaded_accounts_data_size_limit = accounts_data_size_limit,
+                        Err(e) => {
+                            Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
+                            return TransactionExecutionResult::NotExecuted(e);
+                        }
+                    };
+                    let mut accumulated_accounts_data_size: usize = 0;
                     for (i, (key, acct)) in loaded_transaction.accounts.iter_mut().enumerate() {
-                        *acct = unique_loaded_accounts.get(key).unwrap().clone();
+                        if let Some(account) = unique_loaded_accounts.get(key) {
+                            *acct = account.clone();
+                        }
+                        else {
+                            continue;
+                        }
 
                         if message.is_writable(i) {
                             rent = 0;
@@ -388,6 +386,16 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
 
                             validated_fee_payer = true;
                             unique_loaded_accounts.insert(*key, acct.clone());
+                        }
+                        
+                        if let Err(e) = accumulate_and_check_loaded_account_data_size(
+                            &mut accumulated_accounts_data_size,
+                            acct.data().len(),
+                            requested_loaded_accounts_data_size_limit,
+                            error_counters,
+                        ){
+                            error = Some(TransactionExecutionResult::NotExecuted(e));
+                            break;
                         }
                     }
 
@@ -441,6 +449,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                         log_messages_bytes_limit,
                         &program_cache_for_tx_batch.borrow(),
                         &mut unique_loaded_accounts,
+                        &mut dedup_nonce_lookup,
                     );
 
                     if let TransactionExecutionResult::Executed {
@@ -738,6 +747,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         log_messages_bytes_limit: Option<usize>,
         program_cache_for_tx_batch: &ProgramCacheForTxBatch,
         unique_loaded_accounts: &mut HashMap<Pubkey, AccountSharedData>,
+        dedup_nonce_lookup: &mut HashSet<Hash>,
     ) -> TransactionExecutionResult {
         let mut transaction_accounts = std::mem::take(&mut loaded_transaction.accounts);
 
@@ -816,6 +826,17 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             compute_budget,
             &mut programs_modified_by_tx,
         );
+
+        // check for duplicate nonces at this point as beyond this point there will be
+        // not non-recordable errors
+        if let Some(_) = tx.get_durable_nonce() {
+            let nonce_hash = tx.message().recent_blockhash();
+            if dedup_nonce_lookup.contains(nonce_hash) {
+                return TransactionExecutionResult::NotExecuted(TransactionError::BlockhashNotFound);
+            } else {
+                dedup_nonce_lookup.insert(*nonce_hash);
+            }
+        }
 
         let mut process_message_time = Measure::start("process_message_time");
         let process_result = MessageProcessor::process_message(
@@ -1230,6 +1251,7 @@ mod tests {
             unique_loaded_accounts.insert(acct.0, acct.1.clone());
         }
 
+        let mut dedup_nonce_lookup: HashSet<Hash> = HashSet::default();
         let result = batch_processor.execute_loaded_transaction(
             &mock_bank,
             &sanitized_transaction,
@@ -1241,6 +1263,7 @@ mod tests {
             None,
             &program_cache_for_tx_batch,
             &mut unique_loaded_accounts,
+            &mut dedup_nonce_lookup,
         );
 
         let TransactionExecutionResult::Executed {
@@ -1252,6 +1275,7 @@ mod tests {
         };
         assert!(log_messages.is_some());
 
+        let mut dedup_nonce_lookup: HashSet<Hash> = HashSet::default();
         let result = batch_processor.execute_loaded_transaction(
             &mock_bank,
             &sanitized_transaction,
@@ -1263,6 +1287,7 @@ mod tests {
             Some(2),
             &program_cache_for_tx_batch,
             &mut unique_loaded_accounts,
+            &mut dedup_nonce_lookup,
         );
 
         let TransactionExecutionResult::Executed {
@@ -1283,6 +1308,7 @@ mod tests {
         record_config.enable_log_recording = false;
         record_config.enable_cpi_recording = true;
 
+        let mut dedup_nonce_lookup: HashSet<Hash> = HashSet::default();
         let result = batch_processor.execute_loaded_transaction(
             &mock_bank,
             &sanitized_transaction,
@@ -1294,6 +1320,7 @@ mod tests {
             None,
             &program_cache_for_tx_batch,
             &mut unique_loaded_accounts,
+            &mut dedup_nonce_lookup,
         );
 
         let TransactionExecutionResult::Executed {
@@ -1362,6 +1389,7 @@ mod tests {
             unique_loaded_accounts.insert(acct.0, acct.1.clone());
         }
 
+        let mut dedup_nonce_lookup: HashSet<Hash> = HashSet::default();
         let _ = batch_processor.execute_loaded_transaction(
             &mock_bank,
             &sanitized_transaction,
@@ -1373,6 +1401,7 @@ mod tests {
             None,
             &program_cache_for_tx_batch,
             &mut unique_loaded_accounts,
+            &mut dedup_nonce_lookup,
         );
 
         assert_eq!(error_metrics.instruction_error, 1);

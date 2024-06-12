@@ -837,8 +837,4 @@ fn svm_integration() {
         .status
         .is_ok());
 
-    assert!(matches!(
-        result.execution_results[9],
-        TransactionExecutionResult::NotExecuted(TransactionError::AlreadyProcessed)
-    ));
 }
