@@ -80,6 +80,8 @@ pub struct Config {
     pub num_conflict_groups: Option<usize>,
     pub bind_address: IpAddr,
     pub client_node_id: Option<Keypair>,
+    /// used to track how many bench clients are run in parallel
+    pub parallel_bench_clients: usize,
 }
 
 impl Eq for Config {}
@@ -115,6 +117,7 @@ impl Default for Config {
             num_conflict_groups: None,
             bind_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
             client_node_id: None,
+            parallel_bench_clients: 1 // the client itself
         }
     }
 }
@@ -267,6 +270,13 @@ pub fn build_args<'a>(version: &'_ str) -> App<'a, '_> {
                 .value_name("NUM")
                 .takes_value(true)
                 .help("Per-thread-per-iteration sleep in ms"),
+        )
+        .arg(
+            Arg::with_name("parallel-bench-clients")
+                .long("parallel-bench-clients")
+                .value_name("NUM")
+                .takes_value(true)
+                .help("no of parallel bench clients"),
         )
         .arg(
             Arg::with_name("write-client-keys")
@@ -488,6 +498,13 @@ pub fn parse_args(matches: &ArgMatches) -> Result<Config, &'static str> {
             .to_string()
             .parse()
             .map_err(|_| "can't parse thread-batch-sleep-ms")?;
+    }
+
+    if let Some(t) = matches.value_of("parallel-bench-clients") {
+        args.parallel_bench_clients = t
+            .to_string()
+            .parse()
+            .map_err(|_| "can't parse parallel-bench-clients")?;
     }
 
     args.sustained = matches.is_present("sustained");

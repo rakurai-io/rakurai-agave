@@ -33,6 +33,9 @@ use {
         path::Path,
         process::exit,
         sync::{Arc, RwLock},
+        thread::sleep,
+        time::Duration,
+        fs,
     },
 };
 
@@ -256,6 +259,7 @@ fn main() {
         instruction_padding_config,
         bind_address,
         client_node_id,
+        parallel_bench_clients,
         ..
     } = &cli_config;
 
@@ -353,5 +357,36 @@ fn main() {
     } else {
         None
     };
+
+    check_all_parallel_clients(*parallel_bench_clients, id.pubkey());
+    info!("Ready to start the test!!!");
+
     do_bench_tps(client, cli_config, keypairs, nonce_keypairs);
+}
+
+const WATCH_DIR: &str = "./";
+const WATCH_FILE_PREFIX: &str = "ready_";
+const WATCH_CHECK_PERIOD_US: u64 = 1000;
+
+fn check_all_parallel_clients(parallel_bench_clients: usize, key: Pubkey) {
+    info!("number of parallel clients {parallel_bench_clients}");
+    let file_path = format!("{}{}", WATCH_FILE_PREFIX, key.to_string());
+    let _ = File::create(file_path);
+    let path = Path::new(WATCH_DIR);
+    let target_file_count = parallel_bench_clients;
+    loop {
+        let current_count = count_matching_files(&path);
+        if current_count == target_file_count {
+            break;
+        }
+        sleep(Duration::from_micros(WATCH_CHECK_PERIOD_US));
+    }
+}
+
+fn count_matching_files(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok()) // Filter out entries with errors
+        .filter(|entry| entry.file_name().to_str().unwrap().starts_with(WATCH_FILE_PREFIX)) // Check if filename starts with "abc_"
+        .count()
 }
