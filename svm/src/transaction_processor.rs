@@ -283,10 +283,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                                 compute_budget_process_transaction_time.as_us()
                             );
                             if let Err(err) = maybe_compute_budget {
-                                Self::update_loaded_accounts(
-                                    loaded_transaction,
-                                    &unique_loaded_accounts,
-                                );
                                 return TransactionExecutionResult::NotExecuted(err);
                             }
                             maybe_compute_budget.unwrap()
@@ -308,7 +304,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                             feature_set.is_active(&remove_rounding_in_fee_calculation::id()),
                         )
                     } else {
-                        Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
                         return TransactionExecutionResult::NotExecuted(
                             TransactionError::BlockhashNotFound,
                         );
@@ -325,7 +320,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                     match get_requested_loaded_accounts_data_size_limit(message) {
                         Ok(accounts_data_size_limit) => requested_loaded_accounts_data_size_limit = accounts_data_size_limit,
                         Err(e) => {
-                            Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
                             return TransactionExecutionResult::NotExecuted(e);
                         }
                     };
@@ -400,12 +394,10 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                     }
 
                     if let Some(e) = &error {
-                        Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
                         return e.clone();
                     }
                     if !validated_fee_payer {
                         error_counters.account_not_found += 1;
-                        Self::update_loaded_accounts(loaded_transaction, &unique_loaded_accounts);
                         return TransactionExecutionResult::NotExecuted(
                             TransactionError::AccountNotFound,
                         );
@@ -507,18 +499,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         LoadAndExecuteSanitizedTransactionsOutput {
             loaded_transactions,
             execution_results,
-        }
-    }
-
-    /// update loaded accounts state according to the intermediate state
-    fn update_loaded_accounts(
-        loaded_transaction: &mut LoadedTransaction,
-        unique_loaded_accounts: &HashMap<Pubkey, AccountSharedData>,
-    ) {
-        for (key, acct) in loaded_transaction.accounts.iter_mut() {
-            if *acct != *unique_loaded_accounts.get(key).unwrap() {
-                *acct = unique_loaded_accounts.get(key).unwrap().clone();
-            }
         }
     }
 

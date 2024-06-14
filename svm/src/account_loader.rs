@@ -173,10 +173,6 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     let mut accounts_found = Vec::with_capacity(account_keys.len());
     let rent_debits = RentDebits::default();
 
-    let requested_loaded_accounts_data_size_limit =
-        get_requested_loaded_accounts_data_size_limit(message)?;
-    let mut accumulated_accounts_data_size: usize = 0;
-
     let instruction_accounts = message
         .instructions()
         .iter()
@@ -236,12 +232,6 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                     }
                     
                 };
-                accumulate_and_check_loaded_account_data_size(
-                    &mut accumulated_accounts_data_size,
-                    account_size,
-                    requested_loaded_accounts_data_size_limit,
-                    error_counters,
-                )?;
 
                 account
             };
@@ -297,12 +287,6 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                         error_counters.invalid_program_for_execution += 1;
                         return Err(TransactionError::InvalidProgramForExecution);
                     }
-                    accumulate_and_check_loaded_account_data_size(
-                        &mut accumulated_accounts_data_size,
-                        owner_account.data().len(),
-                        requested_loaded_accounts_data_size_limit,
-                        error_counters,
-                    )?;
                     accounts.push((*owner_id, owner_account));
                 } else {
                     error_counters.account_not_found += 1;

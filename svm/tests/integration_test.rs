@@ -436,7 +436,7 @@ fn prepare_transactions(
     all_transactions.push(sanitized_transaction);
     transaction_checks.push(Err(TransactionError::BlockhashNotFound));
 
-    // A transaction for two transafers with same fee payer
+    // A transaction for two transfers with same fee payer
     let sender = Pubkey::new_unique();
     let recipient = Pubkey::new_unique();
     let fee_payer = Pubkey::new_unique();
@@ -757,7 +757,6 @@ fn svm_integration() {
         .unwrap();
 
     assert_eq!(fee_payer_data.1.lamports(), 15000);
-    // println!("fee_payer: {} ", fee_payer_data.1.lamports());
 
     let sender_key = transactions[5].message().account_keys()[1];
     let sender_data = result.loaded_transactions[5]
