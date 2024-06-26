@@ -3267,7 +3267,8 @@ impl Bank {
             .collect::<Result<Vec<_>>>()?;
         let tx_account_lock_limit = self.get_transaction_account_lock_limit();
         let feature_set: Arc<FeatureSet> = self.feature_set.clone();
-        let allow_self_conflicting_txns = feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
+        let allow_self_conflicting_txns =
+            feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
         let (lock_results, _self_conflicting_batch) = self.rc.accounts.lock_accounts(
             sanitized_txs.iter(),
             tx_account_lock_limit,
@@ -3287,7 +3288,8 @@ impl Bank {
     ) -> TransactionBatch<'a, 'b> {
         let tx_account_lock_limit = self.get_transaction_account_lock_limit();
         let feature_set: Arc<FeatureSet> = self.feature_set.clone();
-        let allow_self_conflicting_txns = feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
+        let allow_self_conflicting_txns =
+            feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
 
         let (lock_results, self_conflicting_batch) = self.rc.accounts.lock_accounts(
             txs.iter(),
@@ -3310,7 +3312,8 @@ impl Bank {
         // this lock_results could be: Ok, AccountInUse, WouldExceedBlockMaxLimit or WouldExceedAccountMaxLimit
         let tx_account_lock_limit = self.get_transaction_account_lock_limit();
         let feature_set: Arc<FeatureSet> = self.feature_set.clone();
-        let allow_self_conflicting_txns = feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
+        let allow_self_conflicting_txns =
+            feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
 
         let lock_results = self.rc.accounts.lock_accounts_with_results(
             transactions.iter(),
@@ -7029,7 +7032,8 @@ impl Bank {
             .map(SanitizedTransaction::from_transaction_for_tests)
             .collect::<Vec<_>>();
         let feature_set: Arc<FeatureSet> = self.feature_set.clone();
-        let allow_self_conflicting_txns = feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
+        let allow_self_conflicting_txns =
+            feature_set.is_active(&feature_set::allow_self_conflicting_entries::id());
 
         let (lock_results, _) = self.rc.accounts.lock_accounts(
             sanitized_txs.iter(),
