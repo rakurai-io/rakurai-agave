@@ -72,6 +72,7 @@ impl BatchAccountLocks {
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Default)]
 pub struct AccountLocks {
+    // A key can have multiple outstanding write locks in the case of a self-conflicting batch.
     write_locks: HashMap<Pubkey, u64>,
     readonly_locks: HashMap<Pubkey, u64>,
 }
@@ -596,7 +597,7 @@ impl Accounts {
         batch_account_locks: &mut BatchAccountLocks,
         allow_self_conflicting_entries: bool,
     ) -> (Result<()>, bool) {
-        let mut self_conflicting_tx = false;
+        let mut self_conflicting_batch = false;
         for k in writable_keys.iter() {
             if account_locks.is_locked_write(k) || account_locks.is_locked_readonly(k) {
                 if allow_self_conflicting_entries {
@@ -606,7 +607,7 @@ impl Accounts {
                         debug!("Write-only account in use: {:?}", k);
                         return (Err(TransactionError::AccountInUse), false);
                     }
-                    self_conflicting_tx = true;
+                    self_conflicting_batch = true;
                 } else {
                     return (Err(TransactionError::AccountInUse), false);
                 }
@@ -619,7 +620,7 @@ impl Accounts {
                         debug!("Read-only account in use: {:?}", k);
                         return (Err(TransactionError::AccountInUse), false);
                     }
-                    self_conflicting_tx = true;
+                    self_conflicting_batch = true;
                 } else {
                     return (Err(TransactionError::AccountInUse), false);
                 }
@@ -640,7 +641,7 @@ impl Accounts {
             }
         }
 
-        Ok(())
+        (Ok(()), self_conflicting_batch)
     }
 
     fn unlock_account(
@@ -1387,8 +1388,10 @@ mod tests {
             instructions,
         );
         let tx = new_sanitized_tx(&[&keypair0], message, Hash::default());
-        let (results0, _) = accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, true);
+        let (results0, self_conflicting_batch) =
+            accounts.lock_accounts([tx.clone()].iter(), MAX_TX_ACCOUNT_LOCKS, true);
 
+        assert_eq!(self_conflicting_batch, false);
         assert_eq!(results0, vec![Ok(())]);
         assert_eq!(
             *accounts
@@ -1434,7 +1437,10 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+        let (results1, self_conflicting_batch) =
+            accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+
+        assert_eq!(self_conflicting_batch, true);
         assert_eq!(
             results1,
             vec![
@@ -1477,7 +1483,10 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair1], message, Hash::default());
         let txs = vec![tx0, tx1];
-        let (results1, _) = accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+        let (results1, self_conflicting_batch) =
+            accounts.lock_accounts(txs.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+
+        assert_eq!(self_conflicting_batch, true);
         assert_eq!(
             results1,
             vec![
@@ -1491,8 +1500,6 @@ mod tests {
             .unwrap()
             .write_locks
             .contains_key(&keypair1.pubkey()));
-
-        // accounts.unlock_accounts(txs.iter().zip(&results1));
 
         // batch write-write conflict. outstanding (read/write lock)
         let instructions = vec![CompiledInstruction::new(2, &(), vec![0, 1])];
@@ -1516,7 +1523,11 @@ mod tests {
         );
         let tx1 = new_sanitized_tx(&[&keypair0], message, Hash::default());
         let txs2 = vec![tx0, tx1];
-        let (results2, _) = accounts.lock_accounts(txs2.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+        let (results2, self_conflicting_batch) =
+            accounts.lock_accounts(txs2.iter(), MAX_TX_ACCOUNT_LOCKS, true);
+
+        assert_eq!(self_conflicting_batch, false);
+        // the first tx conflicts with the previous batch
         assert_eq!(
             results2,
             vec![
