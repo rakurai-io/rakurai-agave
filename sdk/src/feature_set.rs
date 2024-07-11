@@ -1058,7 +1058,7 @@ lazy_static! {
         (ed25519_precompile_verify_strict::id(), "Use strict verification in ed25519 precompile SIMD-0152"),
         (vote_only_retransmitter_signed_fec_sets::id(), "vote only on retransmitter signed fec sets"),
         (enable_turbine_extended_fanout_experiments::id(), "enable turbine extended fanout experiments #"),
-        (allow_self_conflicting_entries::id(), "Allow entries with conflicting transactions"),
+        (allow_self_conflicting_entries::id(), "Allow entries with conflicting transactions #1025"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()
