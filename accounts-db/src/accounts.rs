@@ -1873,7 +1873,7 @@ mod tests {
             Ok(()),
         ];
 
-        let results = accounts.lock_accounts_with_results(
+        let (results, _) = accounts.lock_accounts_with_results(
             txs.iter(),
             qos_results.into_iter(),
             MAX_TX_ACCOUNT_LOCKS,
