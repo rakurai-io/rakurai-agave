@@ -695,7 +695,7 @@ impl Accounts {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .map(|tx| tx.get_account_locks(tx_account_lock_limit))
             .collect();
-        self.lock_accounts_inner(tx_account_locks_results)
+        self.lock_accounts_inner(tx_account_locks_results, allow_self_conflicting_entries)
     }
 
     #[must_use]
@@ -706,7 +706,7 @@ impl Accounts {
         results: impl Iterator<Item = Result<()>>,
         tx_account_lock_limit: usize,
         allow_self_conflicting_entries: bool,
-    ) -> Vec<Result<()>> {
+    ) -> (Vec<Result<()>>, bool) {
         let tx_account_locks_results: Vec<Result<_>> = txs
             .zip(results)
             .map(|(tx, result)| match result {
@@ -714,7 +714,7 @@ impl Accounts {
                 Err(err) => Err(err),
             })
             .collect();
-        self.lock_accounts_inner(tx_account_locks_results)
+        self.lock_accounts_inner(tx_account_locks_results, allow_self_conflicting_entries)
     }
 
     #[must_use]

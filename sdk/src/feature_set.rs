@@ -817,6 +817,10 @@ pub mod migrate_config_program_to_core_bpf {
     solana_sdk::declare_id!("2Fr57nzzkLYXW695UdDxDeR5fhnZWSttZeZYemrnpGFV");
 }
 
+pub mod allow_self_conflicting_entries {
+    solana_sdk::declare_id!("ENTRYnPAoT5Swwx73YDGzMp3XnNH1kxacyvLosRHza1i");
+}
+
 lazy_static! {
     /// Map of feature identifiers to user-visible description
     pub static ref FEATURE_NAMES: HashMap<Pubkey, &'static str> = [
@@ -1016,12 +1020,6 @@ lazy_static! {
         (migrate_feature_gate_program_to_core_bpf::id(), "Migrate Feature Gate program to Core BPF (programify) #1003"),
         (vote_only_full_fec_sets::id(), "vote only full fec sets"),
         (migrate_config_program_to_core_bpf::id(), "Migrate Config program to Core BPF #1378"),
-        (enable_get_epoch_stake_syscall::id(), "Enable syscall: sol_get_epoch_stake #884"),
-        (migrate_address_lookup_table_program_to_core_bpf::id(), "Migrate Address Lookup Table program to Core BPF #1651"),
-        (zk_elgamal_proof_program_enabled::id(), "Enable ZkElGamalProof program SIMD-0153"),
-        (verify_retransmitter_signature::id(), "Verify retransmitter signature #1840"),
-        (move_stake_and_move_lamports_ixs::id(), "Enable MoveStake and MoveLamports stake program instructions #1610"),
-        (ed25519_precompile_verify_strict::id(), "Use strict verification in ed25519 precompile SIMD-0152"),
         (allow_self_conflicting_entries::id(), "Allow entries with conflicting transactions #1025"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]

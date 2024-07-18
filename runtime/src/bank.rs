@@ -3285,7 +3285,7 @@ impl Bank {
     pub fn prepare_sanitized_batch<'a, 'b>(
         &'a self,
         txs: &'b [SanitizedTransaction],
-    ) -> TransactionBatch<'a, 'b> {
+    ) -> (TransactionBatch<'a, 'b>, bool) {
         let tx_account_lock_limit = self.get_transaction_account_lock_limit();
         let allow_self_conflicting_txns = self
             .feature_set
@@ -3315,7 +3315,7 @@ impl Bank {
             .feature_set
             .is_active(&feature_set::allow_self_conflicting_entries::id());
 
-        let lock_results = self.rc.accounts.lock_accounts_with_results(
+        let (lock_results, _) = self.rc.accounts.lock_accounts_with_results(
             transactions.iter(),
             transaction_results,
             tx_account_lock_limit,

@@ -192,7 +192,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                 let instruction_account = u8::try_from(i)
                     .map(|i| instruction_accounts.contains(&&i))
                     .unwrap_or(false);
-                let (account_size, account) = if let Some(account_override) =
+                let (_account_size, account) = if let Some(account_override) =
                     account_overrides.and_then(|overrides| overrides.get(key))
                 {
                     (account_override.data().len(), account_override.clone())
