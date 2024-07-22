@@ -2,12 +2,11 @@
 #![feature(test)]
 
 use {
-    criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion},
+    criterion::{criterion_group, criterion_main, Criterion},
     rayon::{
         iter::IndexedParallelIterator,
         prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     },
-    solana_accounts_db::accounts::BATCH_ACCOUNT_LOCKS,
     solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
     solana_runtime::bank::Bank,
     solana_sdk::{
@@ -21,10 +20,8 @@ use {
     },
     std::{
         sync::Arc,
-        thread,
-        time::{Duration, Instant},
+        time::Instant,
     },
-    test::Bencher,
 };
 
 extern crate test;
@@ -322,7 +319,7 @@ const LOCK_COUNTS: [usize; 4] = [2, 4, 8, 16];
 const TRANSACTIONS_PER_ITERATION: usize = 64;
 
 fn bench_entry_lock_accounts_with_self_conflicting_txs(c: &mut Criterion) {
-    let allow_self_conflicting_entries = false;
+    let _allow_self_conflicting_entries = false;
 
     let mut group = c.benchmark_group("bench_lock_accounts");
     for batch_size in BATCH_SIZES {
@@ -342,17 +339,17 @@ fn bench_entry_lock_accounts_with_self_conflicting_txs(c: &mut Criterion) {
             let name = format!("batch_size_{batch_size}_locks_count_{lock_count}");
             group.bench_function(name.as_str(), move |b| {
                 b.iter_custom(|iters| {
-                    BATCH_ACCOUNT_LOCKS.with(|batch_account_locks| {
-                        let mut batch_account_locks = batch_account_locks.borrow_mut();
-                        batch_account_locks.clear();
-                    });
+                    // BATCH_ACCOUNT_LOCKS.with(|batch_account_locks| {
+                    //     let mut batch_account_locks = batch_account_locks.borrow_mut();
+                    //     batch_account_locks.clear();
+                    // });
                     let start = Instant::now();
                     for _i in 0..iters {
                         for batch in (0..batches_per_iteration).filter_map(|_| batches.next()) {
-                            let (results, _) = bank.rc.accounts.lock_accounts(
+                            let results = bank.rc.accounts.lock_accounts(
                                 test::black_box(batch.iter()),
                                 MAX_TX_ACCOUNT_LOCKS,
-                                allow_self_conflicting_entries,
+                                // allow_self_conflicting_entries,
                             );
                             bank.rc.accounts.unlock_accounts(batch.iter().zip(&results));
                         }
@@ -365,7 +362,7 @@ fn bench_entry_lock_accounts_with_self_conflicting_txs(c: &mut Criterion) {
 }
 
 fn bench_entry_lock_accounts(c: &mut Criterion) {
-    let allow_self_conflicting_entries = true;
+    let _allow_self_conflicting_entries = true;
 
     let mut group = c.benchmark_group("bench_lock_accounts");
     for batch_size in BATCH_SIZES {
@@ -387,17 +384,17 @@ fn bench_entry_lock_accounts(c: &mut Criterion) {
             );
             group.bench_function(name.as_str(), move |b| {
                 b.iter_custom(|iters| {
-                    BATCH_ACCOUNT_LOCKS.with(|batch_account_locks| {
-                        let mut batch_account_locks = batch_account_locks.borrow_mut();
-                        batch_account_locks.clear();
-                    });
+                    // BATCH_ACCOUNT_LOCKS.with(|batch_account_locks| {
+                    //     let mut batch_account_locks = batch_account_locks.borrow_mut();
+                    //     batch_account_locks.clear();
+                    // });
                     let start = Instant::now();
                     for _i in 0..iters {
                         for batch in (0..batches_per_iteration).filter_map(|_| batches.next()) {
-                            let (results, _) = bank.rc.accounts.lock_accounts(
+                            let results = bank.rc.accounts.lock_accounts(
                                 test::black_box(batch.iter()),
                                 MAX_TX_ACCOUNT_LOCKS,
-                                allow_self_conflicting_entries,
+                                // allow_self_conflicting_entries,
                             );
                             bank.rc.accounts.unlock_accounts(batch.iter().zip(&results));
                         }

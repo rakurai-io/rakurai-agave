@@ -9,10 +9,6 @@ use {
         storable_accounts::StorableAccounts,
     },
     dashmap::DashMap,
-    itertools::{
-        EitherOrBoth::{Both, Left, Right},
-        Itertools,
-    },
     log::*,
     solana_sdk::{
         account::{AccountSharedData, ReadableAccount},
