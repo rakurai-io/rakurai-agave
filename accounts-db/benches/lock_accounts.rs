@@ -18,10 +18,7 @@ use {
         system_program,
         transaction::{SanitizedTransaction, Transaction, MAX_TX_ACCOUNT_LOCKS},
     },
-    std::{
-        sync::Arc,
-        time::Instant,
-    },
+    std::sync::Arc,
 };
 
 extern crate test;
@@ -145,18 +142,14 @@ fn bench_entry_lock_accounts(c: &mut Criterion) {
                 "batch_size_{batch_size}_locks_count_{lock_count}_self_conflicting_entries_allowed"
             );
             group.bench_function(name.as_str(), move |b| {
-                b.iter_custom(|iters| {
-                    let start = Instant::now();
-                    for _i in 0..iters {
-                        for batch in (0..batches_per_iteration).filter_map(|_| batches.next()) {
-                            let results = bank.rc.accounts.lock_accounts(
-                                test::black_box(batch.iter()),
-                                MAX_TX_ACCOUNT_LOCKS,
-                            );
-                            bank.rc.accounts.unlock_accounts(batch.iter().zip(&results));
-                        }
+                b.iter(|| {
+                    for batch in (0..batches_per_iteration).filter_map(|_| batches.next()) {
+                        let results = bank.rc.accounts.lock_accounts(
+                            test::black_box(batch.iter()),
+                            MAX_TX_ACCOUNT_LOCKS,
+                        );
+                        bank.rc.accounts.unlock_accounts(batch.iter().zip(&results));
                     }
-                    start.elapsed()
                 })
             });
         }
