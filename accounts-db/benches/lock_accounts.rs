@@ -52,23 +52,39 @@ fn create_funded_accounts(bank: &Bank, num: usize) -> Vec<Keypair> {
 }
 
 fn create_transactions(bank: &Bank, num: usize, lock_count: usize) -> Vec<SanitizedTransaction> {
-    let funded_accounts = create_funded_accounts(bank, num * (2 * lock_count));
+    let total_account_locks = if lock_count == 1 {
+        // special case where writable_accounts=2 and readable_accounts=0
+        2
+    } else {
+        2 * lock_count
+    };
+    let funded_accounts = create_funded_accounts(bank, num * (total_account_locks));
     funded_accounts
         .into_par_iter()
-        .chunks(2 * lock_count)
+        .chunks(total_account_locks)
         .map(|chunk| {
-            let writable_accounts = &chunk[..lock_count];
-            let readable_accounts = &chunk[lock_count..];
-
-            let accounts = writable_accounts
-                .iter()
-                .map(|account| AccountMeta::new(account.pubkey(), true))
-                .chain(
-                    readable_accounts
-                        .iter()
-                        .map(|account| AccountMeta::new_readonly(account.pubkey(), false)),
-                )
-                .collect::<Vec<_>>();
+            let (writable_accounts, readable_accounts);
+            let accounts = if lock_count == 1 {
+                // special case where writable_accounts=2 and readable_accounts=0
+                let lock_count = lock_count * 2;
+                writable_accounts = &chunk[..lock_count];
+                writable_accounts
+                    .iter()
+                    .map(|account| AccountMeta::new(account.pubkey(), true))
+                    .collect()
+            } else {
+                writable_accounts = &chunk[..lock_count];
+                readable_accounts = &chunk[lock_count..];
+                writable_accounts
+                    .iter()
+                    .map(|account| AccountMeta::new(account.pubkey(), true))
+                    .chain(
+                        readable_accounts
+                            .iter()
+                            .map(|account| AccountMeta::new_readonly(account.pubkey(), false)),
+                    )
+                    .collect::<Vec<_>>()
+            };
 
             let instruction = Instruction::new_with_bincode(
                 system_program::id(),
@@ -117,7 +133,9 @@ fn bank_setup() -> Arc<Bank> {
 const BATCH_SIZES: [usize; 3] = [1, 32, 64];
 
 // no of readable and writable accounts
-const LOCK_COUNTS: [usize; 4] = [2, 4, 8, 16];
+// 1 is a special case where writable_accounts=2 and readable_accounts=0
+// const LOCK_COUNTS: [usize; 5] = [1, 2, 4, 8, 16];
+const LOCK_COUNTS: [usize; 1] = [1];
 
 const TRANSACTIONS_PER_ITERATION: usize = 64;
 
@@ -138,9 +156,11 @@ fn bench_entry_lock_accounts(c: &mut Criterion) {
             let transactions = create_transactions(&bank, 2_usize.pow(16), lock_count);
             let mut batches = transactions.chunks(batch_size).cycle();
 
-            let name = format!(
-                "batch_size_{batch_size}_locks_count_{lock_count}_self_conflicting_entries_allowed"
-            );
+            let name = if lock_count==1 {
+                format!("batch_size_{batch_size}_locks_count_{}_write_only", lock_count*2)
+            } else {
+                format!("batch_size_{batch_size}_locks_count_{lock_count}")
+            };
             group.bench_function(name.as_str(), move |b| {
                 b.iter(|| {
                     for batch in (0..batches_per_iteration).filter_map(|_| batches.next()) {
