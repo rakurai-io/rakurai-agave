@@ -778,5 +778,4 @@ fn svm_integration() {
         .unwrap()
         .status
         .is_ok());
-
 }
