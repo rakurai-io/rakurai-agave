@@ -2,6 +2,11 @@ use {
     crate::{
         account_overrides::AccountOverrides, account_rent_state::RentState, nonce_info::NonceInfo,
         rollback_accounts::RollbackAccounts, transaction_error_metrics::TransactionErrorMetrics,
+        account_overrides::AccountOverrides,
+        account_rent_state::RentState,
+        nonce_info::{NonceInfo, NoncePartial},
+        rollback_accounts::RollbackAccounts,
+        transaction_error_metrics::TransactionErrorMetrics,
         transaction_processing_callback::TransactionProcessingCallback,
     },
     itertools::Itertools,
@@ -27,7 +32,7 @@ use {
     },
     solana_svm_transaction::svm_message::SVMMessage,
     solana_system_program::{get_system_account_kind, SystemAccountKind},
-    std::{arch::x86_64, collections::HashMap, num::NonZeroU32},
+    std::{collections::HashMap, num::NonZeroU32},
 };
 
 // for the load instructions
@@ -37,8 +42,15 @@ pub type TransactionProgramIndicestResult = Result<TransactionProgramIndices>;
 pub type TransactionLoadAccountResult = Result<Vec<LoadedAccountDetails>>;
 pub type TransactionCheckResult = Result<CheckedTransactionDetails>;
 pub type TransactionValidationResult = Result<ValidatedTransactionDetails>;
-// pub type TransactionLoadResult = Result<LoadedTransaction>;
+pub type TransactionRentResult = Result<RentDetails>;
+pub type TransactionLoadResult = Result<LoadedTransaction>;
 pub type UniqueLoadedAccounts = HashMap<Pubkey, AccountSharedData>;
+
+pub struct RentDetails {
+    pub rent: TransactionRent,
+    pub rent_debits: RentDebits,
+    pub loaded_accounts_data_size: u32,
+}
 
 pub struct LoadedAccountDetails {
     pub pubkey: Pubkey,
@@ -73,6 +85,42 @@ pub struct LoadedTransaction {
     pub rent: TransactionRent,
     pub rent_debits: RentDebits,
     pub loaded_accounts_data_size: u32,
+}
+
+pub fn update_unique_loaded_accounts(
+    loaded_transaction: LoadedTransaction,
+    unique_loaded_accounts: &mut UniqueLoadedAccounts,
+) {
+    let _ = loaded_transaction
+        .accounts
+        .into_iter()
+        .map(|(key, account)| {
+            unique_loaded_accounts.insert(key, account);
+        });
+}
+
+pub fn limited_update_unique_loaded_accounts(
+    loaded_transaction: LoadedTransaction,
+    unique_loaded_accounts: &mut UniqueLoadedAccounts,
+) {
+    // update fee payer
+    if let Some((key, account)) = loaded_transaction.accounts.first() {
+        unique_loaded_accounts.insert(*key, account.clone());
+    }
+    // update nonce account
+    if let Some(nonce) = loaded_transaction.rollback_accounts.nonce() {
+        unique_loaded_accounts
+            .get_mut(nonce.address())
+            .and_then(|account| {
+                loaded_transaction
+                    .accounts
+                    .iter()
+                    .find(|(key, _)| key == nonce.address())
+                    .map(|(_, nonce_account)| {
+                        *account = nonce_account.clone();
+                    })
+            });
+    }
 }
 
 /// Collect rent from an account if rent is still enabled and regardless of
@@ -174,7 +222,7 @@ pub(crate) fn calculate_program_indices<CB: TransactionProcessingCallback>(
                 // load transaction indices
                 match load_transaction_indices(callbacks, message, loaded_accounts, error_metrics) {
                     Ok(program_indices) => Ok(program_indices),
-                    Err(e) => return Err(e),
+                    Err(e) => Err(e),
                 }
             }
             (_, Err(e)) => Err(e.clone()),
@@ -309,13 +357,13 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
 pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
     callbacks: &CB,
     txs: &[SanitizedTransaction],
-    check_results: Vec<TransactionCheckResult>,
+    check_results: &[TransactionCheckResult],
     account_overrides: Option<&AccountOverrides>,
     loaded_programs: &ProgramCacheForTxBatch,
     unique_loaded_accounts: &mut UniqueLoadedAccounts,
 ) -> Vec<TransactionLoadAccountResult> {
     txs.iter()
-        .zip(check_results)
+        .zip(check_results.iter())
         .map(|etx| match etx {
             (tx, Ok(_)) => {
                 let message = tx.message();
@@ -329,10 +377,10 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
                     unique_loaded_accounts,
                 ) {
                     Ok(loaded_accounts) => Ok(loaded_accounts),
-                    Err(e) => return Err(e),
+                    Err(e) => Err(e),
                 }
             }
-            (_, Err(e)) => Err(e),
+            (_, Err(e)) => Err(e.clone()),
         })
         .collect()
 }
@@ -381,32 +429,26 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                     account_shared_data_from_program(&program)
                 } else {
                     if !unique_loaded_accounts.contains_key(key) {
-                        callbacks
-                            .get_account_shared_data(key)
-                            .map(|account| account)
-                            .unwrap_or_else(|| {
-                                account_found = false;
-                                let mut default_account = AccountSharedData::default();
-                                // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
-                                // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
-                                // with this field already set would allow us to skip rent collection for these accounts.
-                                default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                                default_account
-                            })
+                        callbacks.get_account_shared_data(key).unwrap_or_else(|| {
+                            account_found = false;
+                            let mut default_account = AccountSharedData::default();
+                            // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
+                            // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
+                            // with this field already set would allow us to skip rent collection for these accounts.
+                            default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                            default_account
+                        })
                     } else {
-                        unique_loaded_accounts
-                            .get(key)
-                            .map(|account| account.clone())
-                            .unwrap_or_else(|| {
-                                // this should never happen
-                                account_found = false;
-                                let mut default_account = AccountSharedData::default();
-                                // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
-                                // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
-                                // with this field already set would allow us to skip rent collection for these accounts.
-                                default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                                default_account
-                            })
+                        unique_loaded_accounts.get(key).cloned().unwrap_or_else(|| {
+                            // this should never happen
+                            account_found = false;
+                            let mut default_account = AccountSharedData::default();
+                            // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
+                            // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
+                            // with this field already set would allow us to skip rent collection for these accounts.
+                            default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                            default_account
+                        })
                     }
                 }
             };
@@ -435,7 +477,7 @@ fn account_shared_data_from_program(loaded_program: &ProgramCacheEntry) -> Accou
 /// Returns TransactionErr::MaxLoadedAccountsDataSizeExceeded if
 /// `accumulated_accounts_data_size` exceeds
 /// `requested_loaded_accounts_data_size_limit`.
-fn accumulate_and_check_loaded_account_data_size(
+pub fn accumulate_and_check_loaded_account_data_size(
     accumulated_loaded_accounts_data_size: &mut u32,
     account_data_size: usize,
     requested_loaded_accounts_data_size_limit: NonZeroU32,
