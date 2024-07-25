@@ -3,11 +3,10 @@ use qualifier_attr::{field_qualifiers, qualifiers};
 use {
     crate::{
         account_loader::{
-            collect_rent_from_account, load_accounts, validate_fee_payer,
-            CheckedTransactionDetails, LoadedTransaction, TransactionCheckResult,
-            TransactionValidationResult, ValidatedTransactionDetails,
-            TransactionLoadAccountResult, TransactionValidationResult, UniqueLoadedAccounts,
-            ValidatedTransactionDetails, calculate_program_indices
+            calculate_program_indices, collect_rent_from_account, load_accounts,
+            validate_fee_payer, CheckedTransactionDetails, LoadedTransaction,
+            TransactionCheckResult, TransactionLoadAccountResult, TransactionValidationResult,
+            UniqueLoadedAccounts, ValidatedTransactionDetails,
         },
         account_overrides::AccountOverrides,
         message_processor::MessageProcessor,
@@ -299,10 +298,8 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         let program_indexes_results = calculate_program_indices(
             callbacks,
             sanitized_txs,
-            &initial_load_results,
+            &mut initial_load_results,
             &mut error_metrics,
-            config.account_overrides,
-            &program_cache_for_tx_batch.borrow(),
         );
 
         let mut execution_time = Measure::start("execution_time");

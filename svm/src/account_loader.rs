@@ -33,12 +33,12 @@ use {
 // for the load instructions
 pub(crate) type TransactionRent = u64;
 pub(crate) type TransactionProgramIndices = Vec<Vec<IndexOfAccount>>;
+pub type TransactionProgramIndicestResult = Result<TransactionProgramIndices>;
 pub type TransactionLoadAccountResult = Result<Vec<LoadedAccountDetails>>;
 pub type TransactionCheckResult = Result<CheckedTransactionDetails>;
 pub type TransactionValidationResult = Result<ValidatedTransactionDetails>;
 // pub type TransactionLoadResult = Result<LoadedTransaction>;
 pub type UniqueLoadedAccounts = HashMap<Pubkey, AccountSharedData>;
-
 
 pub struct LoadedAccountDetails {
     pub pubkey: Pubkey,
@@ -164,27 +164,20 @@ pub(crate) fn calculate_program_indices<CB: TransactionProcessingCallback>(
     txs: &[impl SVMMessage],
     initial_load_results: &Vec<TransactionLoadAccountResult>,
     error_metrics: &mut TransactionErrorMetrics,
-    loaded_programs: &ProgramCacheForTxBatch,
     unique_loaded_accounts: &mut UniqueLoadedAccounts,
-) -> Vec<Result<()>> {
+) -> Vec<TransactionProgramIndicestResult> {
     txs.iter()
         .zip(initial_load_results)
         .map(|etx| match etx {
             (tx, Ok(loaded_accounts)) => {
                 let message = tx.message();
                 // load transaction indices
-                match load_transaction_indices(
-                    callbacks,
-                    message,
-                    &loaded_accounts,
-                    error_metrics,
-                    unique_loaded_accounts
-                ) {
-                    Ok(()) => Ok(()),
+                match load_transaction_indices(callbacks, message, loaded_accounts, error_metrics) {
+                    Ok(program_indices) => Ok(program_indices),
                     Err(e) => return Err(e),
                 }
             }
-            (_, Err(e)) => Err(*e),
+            (_, Err(e)) => Err(e.clone()),
         })
         .collect()
 }
@@ -192,56 +185,63 @@ pub(crate) fn calculate_program_indices<CB: TransactionProcessingCallback>(
 fn load_transaction_indices<CB: TransactionProcessingCallback>(
     callbacks: &CB,
     message: &impl SVMMessage,
-    accounts: &Vec<LoadedAccountDetails>,
+    accounts: &mut Vec<LoadedAccountDetails>,
     error_metrics: &mut TransactionErrorMetrics,
-    unique_loaded_accounts: &mut UniqueLoadedAccounts,
-) -> Result<LoadedTransaction> {
-    let mut tx_rent: TransactionRent = 0;
-    let account_keys = message.account_keys();
-    let mut accounts_found = Vec::with_capacity(account_keys.len());
-    let mut rent_debits = RentDebits::default();
-    let mut accumulated_accounts_data_size: u32 = 0;
-
-    let instruction_accounts = message
-        .instructions_iter()
-        .flat_map(|instruction| instruction.accounts)
-        .unique()
-        .collect::<Vec<&u8>>();
-
-    let mut accounts = account_keys
+) -> TransactionProgramIndicestResult {
+    let builtins_start_index = accounts.len();
+    let program_indices = message
+        .instructions()
         .iter()
-        .enumerate()
-        .map(|(i, key)| {
-            let mut account_found = true;
-            #[allow(clippy::collapsible_else_if)]
-            let account = if solana_sdk::sysvar::instructions::check_id(key) {
-                construct_instructions_account(message)
-            } else {
-                let is_fee_payer = i == 0;
-                let instruction_account = u8::try_from(i)
-                    .map(|i| instruction_accounts.contains(&&i))
-                    .unwrap_or(false);
-                let (account_size, account, rent) = if is_fee_payer {
-                    (
-                        tx_details.fee_payer_account.data().len(),
-                        tx_details.fee_payer_account.clone(),
-                        tx_details.fee_payer_rent_debit,
-                    )
-                } else if let Some(account_override) =
-                    account_overrides.and_then(|overrides| overrides.get(key))
-                {
-                    (account_override.data().len(), account_override.clone())
-                } else if let Some(program) = (!instruction_account && !message.is_writable(i))
-                    .then_some(())
-                    .and_then(|_| loaded_programs.find(key))
-                {
-                    callbacks
-                        .get_account_shared_data(key)
-                        .ok_or(TransactionError::AccountNotFound)?;
-                    // Optimization to skip loading of accounts which are only used as
-                    // programs in top-level instructions and not passed as instruction accounts.
-                    let program_account = account_shared_data_from_program(&program);
-                    (program.account_size, program_account)
+        .map(|instruction| {
+            let mut account_indices = Vec::with_capacity(2);
+            let program_index = instruction.program_id_index as usize;
+            // This command may never return error, because the transaction is sanitized
+            let (program_id, program_account) =
+                if let Some(loaded_account) = accounts.get(program_index) {
+                    (loaded_account.pubkey, loaded_account.account.clone())
+                } else {
+                    return Err(TransactionError::ProgramAccountNotFound);
+                };
+            if native_loader::check_id(&program_id) {
+                return Ok(account_indices);
+            }
+
+            let account_found = accounts
+                .get(program_index)
+                .map_or(true, |loaded_account| loaded_account.account_found);
+            if !account_found {
+                error_metrics.account_not_found += 1;
+                return Err(TransactionError::ProgramAccountNotFound);
+            }
+
+            if !program_account.executable() {
+                error_metrics.invalid_program_for_execution += 1;
+                return Err(TransactionError::InvalidProgramForExecution);
+            }
+            account_indices.insert(0, program_index as IndexOfAccount);
+            let owner_id = program_account.owner();
+            if native_loader::check_id(owner_id) {
+                return Ok(account_indices);
+            }
+            if !accounts
+                .get(builtins_start_index..)
+                .ok_or(TransactionError::ProgramAccountNotFound)?
+                .iter()
+                .any(|loaded_account| &loaded_account.pubkey == owner_id)
+            {
+                if let Some(owner_account) = callbacks.get_account_shared_data(owner_id) {
+                    if !native_loader::check_id(owner_account.owner())
+                        || !owner_account.executable()
+                    {
+                        error_metrics.invalid_program_for_execution += 1;
+                        return Err(TransactionError::InvalidProgramForExecution);
+                    }
+                    // accounts.push((*owner_id, owner_account));
+                    accounts.push(LoadedAccountDetails {
+                        pubkey: *owner_id,
+                        account: owner_account,
+                        account_found: true,
+                    });
                 } else {
                     if !unique_loaded_accounts.contains_key(key) {
                         callbacks
@@ -296,6 +296,7 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
         })
         .collect::<Result<Vec<_>>>()?;
 
+        Ok(program_indices)
     }
 
 // TODO: move where we want to make loaded transactions
@@ -381,42 +382,40 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                 } else {
                     if !unique_loaded_accounts.contains_key(key) {
                         callbacks
-                        .get_account_shared_data(key)
-                        .map(|account| account)
-                        .unwrap_or_else(|| {
-                            account_found = false;
-                            let mut default_account = AccountSharedData::default();
-                            // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
-                            // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
-                            // with this field already set would allow us to skip rent collection for these accounts.
-                            default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                            default_account
-                        })
+                            .get_account_shared_data(key)
+                            .map(|account| account)
+                            .unwrap_or_else(|| {
+                                account_found = false;
+                                let mut default_account = AccountSharedData::default();
+                                // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
+                                // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
+                                // with this field already set would allow us to skip rent collection for these accounts.
+                                default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                                default_account
+                            })
                     } else {
                         unique_loaded_accounts
-                        .get(key)
-                        .map(|account| account.clone())
-                        .unwrap_or_else(|| {
-                            // this should never happen
-                            account_found = false;
-                            let mut default_account = AccountSharedData::default();
-                            // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
-                            // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
-                            // with this field already set would allow us to skip rent collection for these accounts.
-                            default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                            default_account
-                        }) 
+                            .get(key)
+                            .map(|account| account.clone())
+                            .unwrap_or_else(|| {
+                                // this should never happen
+                                account_found = false;
+                                let mut default_account = AccountSharedData::default();
+                                // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
+                                // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
+                                // with this field already set would allow us to skip rent collection for these accounts.
+                                default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                                default_account
+                            })
                     }
                 }
             };
             unique_loaded_accounts.insert(*key, account.clone());
-            Ok(
-                LoadedAccountDetails {
-                    pubkey: *key,
-                    account,
-                    account_found
-                }
-            )
+            Ok(LoadedAccountDetails {
+                pubkey: *key,
+                account,
+                account_found,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(accounts)
