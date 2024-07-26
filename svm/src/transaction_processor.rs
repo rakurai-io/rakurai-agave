@@ -299,6 +299,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             sanitized_txs,
             &mut initial_load_results,
             &mut error_metrics,
+            &mut unique_loaded_accounts,
         );
 
         let mut execution_time = Measure::start("execution_time");
@@ -376,8 +377,6 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                             &mut unique_loaded_accounts,
                         );
 
-                        loaded_transactions.push(Ok(loaded_transaction.clone()));
-
                         let result = self.execute_loaded_transaction(
                             tx,
                             &mut loaded_transaction,
@@ -387,6 +386,8 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
                             environment,
                             config,
                         );
+
+                        loaded_transactions.push(Ok(loaded_transaction.clone()));
 
                         if result.was_executed_successfully() {
                             // store all accounts back into the map

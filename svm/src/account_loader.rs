@@ -54,7 +54,6 @@ pub struct RentDetails {
 
 pub struct LoadedAccountDetails {
     pub pubkey: Pubkey,
-    pub account: AccountSharedData,
     pub account_found: bool,
 }
 
@@ -220,7 +219,13 @@ pub(crate) fn calculate_program_indices<CB: TransactionProcessingCallback>(
             (tx, Ok(loaded_accounts)) => {
                 let message = tx.message();
                 // load transaction indices
-                match load_transaction_indices(callbacks, message, loaded_accounts, error_metrics) {
+                match load_transaction_indices(
+                    callbacks,
+                    message,
+                    loaded_accounts,
+                    error_metrics,
+                    unique_loaded_accounts,
+                ) {
                     Ok(program_indices) => Ok(program_indices),
                     Err(e) => Err(e),
                 }
@@ -235,6 +240,7 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
     message: &impl SVMMessage,
     accounts: &mut Vec<LoadedAccountDetails>,
     error_metrics: &mut TransactionErrorMetrics,
+    unique_loaded_accounts: &mut UniqueLoadedAccounts,
 ) -> TransactionProgramIndicestResult {
     let builtins_start_index = accounts.len();
     let program_indices = message
@@ -246,7 +252,8 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
             // This command may never return error, because the transaction is sanitized
             let (program_id, program_account) =
                 if let Some(loaded_account) = accounts.get(program_index) {
-                    (loaded_account.pubkey, loaded_account.account.clone())
+                    let account = unique_loaded_accounts.get(&loaded_account.pubkey).unwrap();
+                    (loaded_account.pubkey, account)
                 } else {
                     return Err(TransactionError::ProgramAccountNotFound);
                 };
@@ -284,10 +291,8 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
                         error_metrics.invalid_program_for_execution += 1;
                         return Err(TransactionError::InvalidProgramForExecution);
                     }
-                    // accounts.push((*owner_id, owner_account));
                     accounts.push(LoadedAccountDetails {
                         pubkey: *owner_id,
-                        account: owner_account,
                         account_found: true,
                     });
                 } else {
@@ -455,7 +460,6 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
             unique_loaded_accounts.insert(*key, account.clone());
             Ok(LoadedAccountDetails {
                 pubkey: *key,
-                account,
                 account_found,
             })
         })
