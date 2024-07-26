@@ -46,6 +46,7 @@ pub type TransactionRentResult = Result<RentDetails>;
 pub type TransactionLoadResult = Result<LoadedTransaction>;
 pub type UniqueLoadedAccounts = HashMap<Pubkey, AccountSharedData>;
 
+#[derive(Clone)]
 pub struct RentDetails {
     pub rent: TransactionRent,
     pub rent_debits: RentDebits,
