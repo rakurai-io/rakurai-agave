@@ -2,11 +2,6 @@ use {
     crate::{
         account_overrides::AccountOverrides, account_rent_state::RentState, nonce_info::NonceInfo,
         rollback_accounts::RollbackAccounts, transaction_error_metrics::TransactionErrorMetrics,
-        account_overrides::AccountOverrides,
-        account_rent_state::RentState,
-        nonce_info::{NonceInfo, NoncePartial},
-        rollback_accounts::RollbackAccounts,
-        transaction_error_metrics::TransactionErrorMetrics,
         transaction_processing_callback::TransactionProcessingCallback,
     },
     itertools::Itertools,
@@ -27,7 +22,7 @@ use {
             self,
             instructions::{construct_instructions_data, BorrowedAccountMeta, BorrowedInstruction},
         },
-        transaction::{Result, TransactionError},
+        transaction::{Result, SanitizedTransaction, TransactionError},
         transaction_context::{IndexOfAccount, TransactionAccount},
     },
     solana_svm_transaction::svm_message::SVMMessage,
@@ -103,26 +98,34 @@ pub fn update_unique_loaded_accounts(
 }
 
 pub fn limited_update_unique_loaded_accounts(
+    transaction: &SanitizedTransaction,
     loaded_transaction: &LoadedTransaction,
     unique_loaded_accounts: &mut UniqueLoadedAccounts,
 ) {
-    // update fee payer
-    if let Some((key, account)) = loaded_transaction.accounts.first() {
-        unique_loaded_accounts.insert(*key, account.clone());
-    }
-    // update nonce account
-    if let Some(nonce) = loaded_transaction.rollback_accounts.nonce() {
-        unique_loaded_accounts
-            .get_mut(nonce.address())
-            .and_then(|account| {
-                loaded_transaction
-                    .accounts
-                    .iter()
-                    .find(|(key, _)| key == nonce.address())
-                    .map(|(_, nonce_account)| {
-                        *account = nonce_account.clone();
-                    })
-            });
+    let message = transaction.message();
+    let fee_payer_address = message.fee_payer();
+    match &loaded_transaction.rollback_accounts {
+        RollbackAccounts::FeePayerOnly { fee_payer_account } => {
+            if let Some(account) = unique_loaded_accounts.get_mut(fee_payer_address) {
+                *account = fee_payer_account.clone();
+            }
+        }
+        RollbackAccounts::SameNonceAndFeePayer { nonce } => {
+            if let Some(account) = unique_loaded_accounts.get_mut(nonce.address()) {
+                *account = nonce.account().clone();
+            }
+        }
+        RollbackAccounts::SeparateNonceAndFeePayer {
+            nonce,
+            fee_payer_account,
+        } => {
+            if let Some(account) = unique_loaded_accounts.get_mut(fee_payer_address) {
+                *account = fee_payer_account.clone();
+            }
+            if let Some(account) = unique_loaded_accounts.get_mut(nonce.address()) {
+                *account = nonce.account().clone();
+            }
+        }
     }
 }
 
@@ -213,15 +216,14 @@ pub fn validate_fee_payer(
 pub(crate) fn calculate_program_indices<CB: TransactionProcessingCallback>(
     callbacks: &CB,
     txs: &[impl SVMMessage],
-    initial_load_results: &Vec<TransactionLoadAccountResult>,
+    initial_load_results: &mut Vec<TransactionLoadAccountResult>,
     error_metrics: &mut TransactionErrorMetrics,
     unique_loaded_accounts: &mut UniqueLoadedAccounts,
 ) -> Vec<TransactionProgramIndicestResult> {
     txs.iter()
         .zip(initial_load_results)
         .map(|etx| match etx {
-            (tx, Ok(loaded_accounts)) => {
-                let message = tx.message();
+            (message, Ok(loaded_accounts)) => {
                 // load transaction indices
                 match load_transaction_indices(
                     callbacks,
@@ -248,8 +250,7 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
 ) -> TransactionProgramIndicestResult {
     let builtins_start_index = accounts.len();
     let program_indices = message
-        .instructions()
-        .iter()
+        .instructions_iter()
         .map(|instruction| {
             let mut account_indices = Vec::with_capacity(2);
             let program_index = instruction.program_id_index as usize;
@@ -301,61 +302,16 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
                     });
                     unique_loaded_accounts.insert(*owner_id, owner_account);
                 } else {
-                    if !unique_loaded_accounts.contains_key(key) {
-                        callbacks
-                        .get_account_shared_data(key)
-                        .map(|mut account| {
-                            if message.is_writable(i) {
-                                let rent_due = collect_rent_from_account(
-                                    feature_set,
-                                    rent_collector,
-                                    key,
-                                    &mut account,
-                                )
-                                .rent_amount;
-
-                                (account.data().len(), account, rent_due)
-                            } else {
-                                (account.data().len(), account, 0)
-                            }
-                        })
-                        .unwrap_or_else(|| {
-                            account_found = false;
-                            let mut default_account = AccountSharedData::default();
-                            // All new accounts must be rent-exempt (enforced in Bank::execute_loaded_transaction).
-                            // Currently, rent collection sets rent_epoch to u64::MAX, but initializing the account
-                            // with this field already set would allow us to skip rent collection for these accounts.
-                            default_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
-                            unique_loaded_accounts.insert(*key, default_account.clone());
-                            (default_account.data().len(), default_account)
-                        })
-                    } 
-                    else {
-                        let account = unique_loaded_accounts.get(key).unwrap().clone();
-                        (account.data().len(), account)
-                    }
-                    
-                };
-                accumulate_and_check_loaded_account_data_size(
-                    &mut accumulated_accounts_data_size,
-                    account_size,
-                    tx_details.compute_budget_limits.loaded_accounts_bytes,
-                    error_metrics,
-                )?;
-
-                tx_rent += rent;
-                rent_debits.insert(key, rent, account.lamports());
-
-                account
-            };
-
-            accounts_found.push(account_found);
-            Ok((*key, account))
+                    error_metrics.account_not_found += 1;
+                    return Err(TransactionError::ProgramAccountNotFound);
+                }
+            }
+            Ok(account_indices)
         })
         .collect::<Result<Vec<_>>>()?;
 
-        Ok(program_indices)
-    }
+    Ok(program_indices)
+}
 
 // TODO: move where we want to make loaded transactions
 /// Collect information about accounts used in txs transactions and
@@ -366,7 +322,7 @@ fn load_transaction_indices<CB: TransactionProcessingCallback>(
 /// Load unique accounts in `unique_loaded_accounts` and returns only loading error
 pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
     callbacks: &CB,
-    txs: &[SanitizedTransaction],
+    txs: &[impl SVMMessage],
     check_results: &[TransactionCheckResult],
     account_overrides: Option<&AccountOverrides>,
     loaded_programs: &ProgramCacheForTxBatch,
@@ -375,9 +331,7 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
     txs.iter()
         .zip(check_results.iter())
         .map(|etx| match etx {
-            (tx, Ok(_)) => {
-                let message = tx.message();
-
+            (message, Ok(_)) => {
                 // load transactions
                 match load_transaction_accounts(
                     callbacks,
@@ -397,7 +351,7 @@ pub(crate) fn load_accounts<CB: TransactionProcessingCallback>(
 
 fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     callbacks: &CB,
-    message: &SanitizedMessage,
+    message: &impl SVMMessage,
     account_overrides: Option<&AccountOverrides>,
     loaded_programs: &ProgramCacheForTxBatch,
     unique_loaded_accounts: &mut UniqueLoadedAccounts,
@@ -405,9 +359,8 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     let account_keys = message.account_keys();
 
     let instruction_accounts = message
-        .instructions()
-        .iter()
-        .flat_map(|instruction| &instruction.accounts)
+        .instructions_iter()
+        .flat_map(|instruction| instruction.accounts)
         .unique()
         .collect::<Vec<&u8>>();
 
@@ -547,8 +500,6 @@ mod tests {
         },
         nonce::state::Versions as NonceVersions,
         solana_compute_budget::{compute_budget::ComputeBudget, compute_budget_limits},
-        solana_program_runtime::loaded_programs::{ProgramCacheEntry, ProgramCacheForTxBatch},
-        solana_compute_budget::{compute_budget::ComputeBudget, compute_budget_processor},
         solana_program_runtime::loaded_programs::{
             BlockRelation, ForkGraph, ProgramCacheEntry, ProgramCacheForTxBatch,
         },
