@@ -117,7 +117,7 @@ impl Default for Config {
             num_conflict_groups: None,
             bind_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
             client_node_id: None,
-            parallel_bench_clients: 1 // the client itself
+            parallel_bench_clients: 1, // the client itself
         }
     }
 }
@@ -436,7 +436,7 @@ pub fn parse_args(matches: &ArgMatches) -> Result<Config, &'static str> {
         &config.keypair_path,
     );
     if let Ok(id) = read_keypair_file(id_path) {
-        args.id = id;
+        args.id = Keypair::new();
     } else if matches.is_present("identity") {
         return Err("could not parse identity path");
     }
