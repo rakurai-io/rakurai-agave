@@ -660,12 +660,9 @@ fn process_entries(
                     (starting_index..starting_index.saturating_add(transactions.len())).collect();
                 loop {
                     // try to lock the accounts
-                    let (batch, _self_conflicting_batch) =
+                    let (batch, self_conflicting_batch) =
                         bank.prepare_sanitized_batch(transactions);
                     let first_lock_err = first_err(batch.lock_results());
-                    // prepare_sanitized_batch will return this flag after self conflicting locking is allowed
-                    // ref: https://github.com/anza-xyz/agave/pull/1624
-                    let self_conflicting_batch = true;
 
                     // if locking worked
                     if first_lock_err.is_ok() {
